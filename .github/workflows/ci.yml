@@ -22,11 +22,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - run: rustup toolchain install nightly --profile minimal --component rustfmt
       - run: rustup toolchain install
-      - uses: uncenter/setup-taplo@v1
+      - run: rustup toolchain install nightly-2026-08-31 --profile minimal --component rustfmt
+      - run: cargo install taplo-cli --locked
       - run: taplo format --check
-      - run: cargo +nightly fmt --all -- --check
+      - run: cargo +nightly-2026-08-31 fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
   test:
