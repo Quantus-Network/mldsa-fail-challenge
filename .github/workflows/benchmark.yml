@@ -27,6 +27,25 @@ on:
       m:
         description: Instance m override (smoke tests only)
         default: ""
+  # Lets a workflow on a feature branch exercise this one before it reaches
+  # main, where workflow_dispatch becomes available.
+  workflow_call:
+    inputs:
+      commit:
+        type: string
+        required: true
+      pr:
+        type: string
+        required: true
+      secs:
+        type: string
+        default: ""
+      n:
+        type: string
+        default: ""
+      m:
+        type: string
+        default: ""
 
 permissions:
   contents: read
