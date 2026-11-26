@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: publish
-  cancel-in-progress: false
+  queue: max
 
 env:
   GH_TOKEN: ${{ github.token }}
@@ -22,7 +22,17 @@ env:
 
 jobs:
   publish:
+    # Only benchmark runs dispatched from main's benchmark.yml in this
+    # repository are trusted; a Benchmark workflow modified on a branch runs
+    # under another event and another head and is ignored here.
+    if: >-
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.path == '.github/workflows/benchmark.yml'
     runs-on: ubuntu-latest
+    env:
+      SITE_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,41 +59,55 @@ jobs:
         run: |
           pr=$(jq -r .pr artifact/meta.json)
           gh pr view "$pr" --repo "$GITHUB_REPOSITORY" --json author,title > pr.json
-          python3 .github/scripts/publish.py artifact records pr.json "${{ vars.PROMOTION_MARGIN_BITS || '0' }}" > decision.json
+          python3 .github/scripts/publish.py fold artifact records pr.json "${{ vars.PROMOTION_MARGIN_BITS || '0' }}" > decision.json
           jq . decision.json
           {
             echo "pr=$pr"
             echo "promote=$(jq -r .promote decision.json)"
-            echo "commit=$(jq -r .commit artifact/meta.json)"
+            echo "record_commit=$(jq -r .record_commit decision.json)"
+            echo "record_id=$(jq -r .record_id decision.json)"
           } >> "$GITHUB_OUTPUT"
           cd records
           git add -A
           git commit -q -m "Run $RUN_ID: PR #$pr, $(jq -r .status ../decision.json)"
           git push origin HEAD:refs/heads/records
 
+      # The record is marked as pending until main actually holds it, so a
+      # failed push here is retried by the next publish run instead of
+      # leaving the board claiming a promotion that did not happen.
       - name: Promote to main
         if: steps.fold.outputs.promote == 'true'
         env:
-          COMMIT: ${{ steps.fold.outputs.commit }}
-          PR: ${{ steps.fold.outputs.pr }}
+          COMMIT: ${{ steps.fold.outputs.record_commit }}
+          RECORD_ID: ${{ steps.fold.outputs.record_id }}
         run: |
           git fetch --no-tags origin main "$COMMIT"
+          test "$(git rev-list --parents -n 1 "$COMMIT" | wc -w)" -eq 2
+          git merge-base --is-ancestor "$COMMIT^" origin/main
+          test -z "$(git diff --name-only "$COMMIT^" "$COMMIT" | grep -v '^submission/' || true)"
           git checkout -q main
           git rm -r -q submission
           git checkout "$COMMIT" -- submission
           git add -A submission
-          git diff --cached --quiet || git commit -q -m "Record: PR #$PR" -m "Submission commit $COMMIT, benchmark run $RUN_ID."
+          git diff --cached --quiet || git commit -q -m "Record: run $RECORD_ID" -m "Submission commit $COMMIT."
           git push origin HEAD:main
+          python3 .github/scripts/publish.py mark-promoted records "$RECORD_ID"
+          cd records
+          git add -A
+          git commit -q -m "Run $RECORD_ID is on main"
+          git push origin HEAD:refs/heads/records
 
       - name: Comment on the pull request
+        if: always() && steps.fold.outputs.pr != ''
         run: |
           jq -r .comment decision.json > comment.md
+          if [ "${{ steps.fold.outputs.promote }}" = true ] && [ "${{ job.status }}" != success ]; then
+            echo "Promotion to main did not complete; it will be retried by the next publish run." >> comment.md
+          fi
           gh pr comment "${{ steps.fold.outputs.pr }}" --repo "$GITHUB_REPOSITORY" --body-file comment.md
 
       - name: Notify the site
-        if: vars.SITE_REPOSITORY != '' && secrets.SITE_DISPATCH_TOKEN != ''
-        env:
-          GH_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
+        if: always() && vars.SITE_REPOSITORY != '' && env.SITE_TOKEN != ''
         run: |
-          gh api "repos/${{ vars.SITE_REPOSITORY }}/dispatches" \
+          GH_TOKEN="$SITE_TOKEN" gh api "repos/${{ vars.SITE_REPOSITORY }}/dispatches" \
             -f event_type=records-updated -f 'client_payload[run_id]'="$RUN_ID"

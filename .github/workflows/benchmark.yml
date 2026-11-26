@@ -4,9 +4,10 @@
 # build and execution of `bench`, which is the only binary that links the
 # submission. Those run as the unprivileged `contestant` user with no network.
 # The scored basis is whatever `contestant` had written to disk when the
-# budget (plus the harness grace) elapsed, copied out by this job at that
-# moment, and re-scored by the trusted `runner verify`. Nothing the sandboxed
-# process prints or writes afterwards affects the score.
+# budget (plus the harness grace) elapsed: at that moment every sandbox
+# process is frozen, the file is imported if it is a plain regular file of
+# sane size, and the trusted `runner verify` scores the imported copy.
+# Nothing the sandboxed process prints or writes afterwards affects the score.
 name: Benchmark
 
 on:
@@ -50,10 +51,11 @@ on:
 permissions:
   contents: read
 
-# One run at a time: timings are only comparable on an idle machine.
+# One run at a time, every queued run kept: timings are only comparable on
+# an idle machine, and an approved run must never be dropped.
 concurrency:
   group: benchmark
-  cancel-in-progress: false
+  queue: max
 
 env:
   COMMIT: ${{ inputs.commit }}
@@ -145,17 +147,38 @@ jobs:
             --snapshot-secs 10 --basis "$OUT/basis.bin" --report "$OUT/report.json" --events "$OUT/events.jsonl" \
             > trusted/bench.log 2>&1 &
           bench_pid=$!
+
+          # Imports a sandbox file while every sandbox process is frozen, so
+          # the file cannot change under us. Only plain regular files within
+          # the size bound are accepted, read as the sandbox user so a link to
+          # anything else on the host is unreadable rather than copied.
+          import_file() {
+            local src=$1 dst=$2 max=$3 kind size
+            kind=$(sudo -u contestant stat -c %F -- "$src" 2>/dev/null) || { echo "$src: missing"; return 1; }
+            size=$(sudo -u contestant stat -c %s -- "$src")
+            if [ "$kind" != "regular file" ] || [ "$size" -gt "$max" ]; then
+              echo "$src: refused ($kind, $size bytes)"
+              return 1
+            fi
+            sudo -u contestant cat -- "$src" > "$dst"
+          }
+          frozen() { sudo pkill -STOP -u contestant || true; "$@"; local rc=$?; sudo pkill -CONT -u contestant || true; return $rc; }
+
           sleep $((SECS + GRACE_SECS + 10))
-          cp "$OUT/basis.bin" trusted/basis.bin
+          frozen import_file "$OUT/basis.bin" trusted/basis.bin $((256 * 1024 * 1024)) || true
           echo "basis taken at $(date -u +%FT%TZ)"
+
           wait $bench_pid && status=0 || status=$?
           echo "bench exit $status"
           echo "exit=$status" >> "$GITHUB_OUTPUT"
           echo "finished=$(date -u +%FT%TZ)" >> "$GITHUB_OUTPUT"
           echo "instance_flags=$instance_flags" >> "$GITHUB_OUTPUT"
-          sudo cp "$OUT"/report.json "$OUT"/events.jsonl trusted/ 2>/dev/null || true
-          sudo chown -R "$(id -u)" trusted
+          sudo pkill -STOP -u contestant || true
+          import_file "$OUT/report.json" trusted/report.json $((64 * 1024 * 1024)) || true
+          import_file "$OUT/events.jsonl" trusted/events.jsonl $((64 * 1024 * 1024)) || true
+          sudo pkill -KILL -u contestant || true
           tail -n 5 trusted/bench.log || true
+          test -s trusted/basis.bin
 
       - name: Verify (trusted)
         id: verify

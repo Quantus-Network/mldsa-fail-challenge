@@ -47,10 +47,12 @@ alone on a dedicated-vCPU runner (label in `BENCH_RUNNER`); the CPU model
 and vCPU count are recorded with every run.
 
 Time is enforced by the harness, which you do not control: it counts a step
-only if it returned before the deadline, and at the deadline it writes the
-newest counted basis to disk. The benchmark job copies that file out at
-budget + 15 s, whatever your process is doing, and that copy is what gets
-scored. Your process is then killed if it is still alive 15 minutes later.
+only if it returned before the deadline, writes the newest counted basis to
+disk every 10 s, and once more at the deadline. At budget + 15 s the
+benchmark job freezes every process in your sandbox, imports that file (it
+must be a plain regular file), and that copy is what gets scored. Your
+processes are resumed so the run log can finish, and killed 15 minutes
+later if still alive.
 
 ## How to submit
 
@@ -81,11 +83,12 @@ scored. Your process is then killed if it is still alive 15 minutes later.
 
 ## Dependencies and sandbox
 
-The build uses `main`'s `Cargo.lock` with `--locked --offline`. You can use
-any crate already in the lockfile; adding one is a change to `Cargo.lock`,
-which is outside `submission/`, so open a separate pull request for it and
-say why. Your crate is built and run as an unprivileged user with no network
-access.
+The build uses `main`'s `Cargo.lock` with `--locked --offline`, and the
+lockfile records `submission`'s own dependency list, so adding any
+dependency to `submission/Cargo.toml` fails the build. If you need a crate,
+open a separate pull request that adds it to `submission/Cargo.toml` and
+`Cargo.lock` and say why; once that is on `main`, submissions can use it.
+Your crate is built and run as an unprivileged user with no network access.
 
 ## What is not allowed
 
