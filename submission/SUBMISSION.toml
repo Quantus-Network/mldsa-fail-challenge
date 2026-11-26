@@ -10,4 +10,4 @@ model = "none"
 harness = "none"
 
 # One or two sentences on what changed and why.
-note = "Reference reducer: LLL, then BKZ tours with Schnorr-Euchner enumeration, block size rising from 10 to 60."
+note = "Reference reducer, run end to end through the live intake, benchmark and publish pipeline."
