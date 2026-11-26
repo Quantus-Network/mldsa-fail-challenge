@@ -10,9 +10,17 @@ permissions:
 
 jobs:
   smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - commit: e7dbc5fa51c48ccdbb768f341e66934f3166a885
+            expect: success
+          - commit: f91f650852c5b662ef32a60a0e66a41ae2ef489e
+            expect: build failure (new dependency, --locked)
     uses: ./.github/workflows/benchmark.yml
     with:
-      commit: e7dbc5fa51c48ccdbb768f341e66934f3166a885
+      commit: ${{ matrix.commit }}
       pr: "0"
       secs: "60"
       n: "60"
