@@ -210,6 +210,11 @@ impl Report {
 /// Receives progress during a run.
 pub trait Observer {
 	fn on_start(&mut self, _instance: &InstanceDescriptor, _reducer: &str, _budget: &Budget) {}
+	/// The basis after a counted step, when it is still the newest snapshot
+	/// by the time the harness thread sees the step, and once more with
+	/// `last == true` for the basis about to be verified (which may repeat a
+	/// step). Runs on the harness thread; never delays the reducer.
+	fn on_snapshot(&mut self, _step: u64, _basis: &Basis, _last: bool) {}
 	fn on_step(&mut self, _event: &StepEvent) {}
 	fn on_finish(&mut self, _report: &Report) {}
 }
@@ -217,6 +222,33 @@ pub trait Observer {
 pub struct NullObserver;
 
 impl Observer for NullObserver {}
+
+/// Every event goes to each observer in turn.
+impl Observer for Vec<&mut dyn Observer> {
+	fn on_start(&mut self, instance: &InstanceDescriptor, reducer: &str, budget: &Budget) {
+		for o in self.iter_mut() {
+			o.on_start(instance, reducer, budget);
+		}
+	}
+
+	fn on_snapshot(&mut self, step: u64, basis: &Basis, last: bool) {
+		for o in self.iter_mut() {
+			o.on_snapshot(step, basis, last);
+		}
+	}
+
+	fn on_step(&mut self, event: &StepEvent) {
+		for o in self.iter_mut() {
+			o.on_step(event);
+		}
+	}
+
+	fn on_finish(&mut self, report: &Report) {
+		for o in self.iter_mut() {
+			o.on_finish(report);
+		}
+	}
+}
 
 /// Human-readable progress on stderr.
 pub struct StderrObserver;
@@ -247,11 +279,12 @@ impl Observer for StderrObserver {
 	fn on_finish(&mut self, r: &Report) {
 		match &r.result {
 			Ok(s) => eprintln!(
-				"[finish] {:?} after {:.2}s, {} steps: score {:.2} bits, |b1|={:.1} ({:.2}×GH), slope {:.4}",
+				"[finish] {:?} after {:.2}s, {} steps: score {:.2} bits, β_eff {}, |b1|={:.1} ({:.2}×GH), slope {:.4}",
 				r.termination,
 				r.elapsed_secs,
 				r.counted_steps,
 				s.score_bits,
+				s.effective_block_size.map(|b| format!("{b:.1}")).unwrap_or_else(|| "< LLL".into()),
 				s.first_norm,
 				s.first_over_gh,
 				s.slope
@@ -434,18 +467,19 @@ pub fn run<R: Reducer + 'static>(
 				};
 				if counted {
 					counted_steps += 1;
-					let due = last_trace
-						.is_none_or(|t: Instant| t.elapsed() >= budget.trace_min_interval);
-					if budget.trace && due {
-						// Only the newest snapshot is still available; older
-						// steps go untraced when the harness thread is behind.
-						let current = snapshot
-							.lock()
-							.unwrap_or_else(|e| e.into_inner())
-							.as_ref()
-							.filter(|s| s.step == step)
-							.map(|s| s.basis.clone());
-						if let Some(basis) = current {
+					// Only the newest snapshot is still available; older
+					// steps go unobserved when the harness thread is behind.
+					let current = snapshot
+						.lock()
+						.unwrap_or_else(|e| e.into_inner())
+						.as_ref()
+						.filter(|s| s.step == step)
+						.map(|s| s.basis.clone());
+					if let Some(basis) = current {
+						observer.on_snapshot(step, &basis, false);
+						let due = last_trace
+							.is_none_or(|t: Instant| t.elapsed() >= budget.trace_min_interval);
+						if budget.trace && due {
 							event.approx_score_bits = score_fast(instance, &basis);
 							last_trace = Some(Instant::now());
 						}
@@ -483,12 +517,14 @@ pub fn run<R: Reducer + 'static>(
 	stop.store(true, Ordering::Relaxed);
 	let elapsed_secs = ended_at.duration_since(started).as_secs_f64();
 
-	let last_good = snapshot
-		.lock()
-		.unwrap_or_else(|e| e.into_inner())
-		.take()
-		.map(|s| Arc::try_unwrap(s.basis).unwrap_or_else(|b| (*b).clone()))
-		.unwrap_or_else(|| instance.start_basis());
+	let last_good = match snapshot.lock().unwrap_or_else(|e| e.into_inner()).take() {
+		Some(s) => {
+			let basis = Arc::try_unwrap(s.basis).unwrap_or_else(|b| (*b).clone());
+			observer.on_snapshot(s.step, &basis, true);
+			basis
+		},
+		None => instance.start_basis(),
+	};
 	let result = verify(instance, &last_good);
 	let report = Report {
 		instance: instance.descriptor(),
@@ -662,6 +698,34 @@ mod tests {
 		let mut expected = inst.start_basis();
 		expected.rows.reverse();
 		assert_eq!(r.basis.unwrap(), expected);
+	}
+
+	#[derive(Default)]
+	struct Snapshots(Vec<(u64, Basis)>);
+
+	impl Observer for Snapshots {
+		fn on_snapshot(&mut self, step: u64, basis: &Basis, last: bool) {
+			assert!(!last || step == 2);
+			self.0.push((step, basis.clone()));
+		}
+	}
+
+	#[test]
+	fn snapshots_are_delivered_in_order_and_end_with_the_scored_basis() {
+		let inst = instance();
+		let mut obs = Snapshots::default();
+		let r = run(&inst, DoneAfter(3), &budget(5_000), &mut obs);
+		let steps: Vec<u64> = obs.0.iter().map(|(s, _)| *s).collect();
+		assert!(steps.windows(2).all(|w| w[0] <= w[1]), "{steps:?}");
+		assert_eq!(steps.last(), Some(&2));
+		assert_eq!(&obs.0.last().unwrap().1, r.basis.as_ref().unwrap());
+		for (step, basis) in &obs.0 {
+			let mut expected = inst.start_basis();
+			if step % 2 == 0 {
+				expected.rows.reverse();
+			}
+			assert_eq!(basis, &expected);
+		}
 	}
 
 	#[test]

@@ -1,5 +1,5 @@
 [workspace]
-members = ["lattice-attack"]
+members = ["lattice-attack", "runner", "submission"]
 resolver = "2"
 
 [workspace.dependencies]

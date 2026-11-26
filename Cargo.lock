@@ -94,6 +94,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "runner"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "qp-rusty-crystals-dilithium",
+ "qp-rusty-crystals-lattice-attack",
+ "serde",
+ "serde_json",
+ "submission",
+]
+
+[[package]]
 name = "serde"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -134,6 +146,13 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
+]
+
+[[package]]
+name = "submission"
+version = "0.1.0"
+dependencies = [
+ "qp-rusty-crystals-lattice-attack",
 ]
 
 [[package]]

@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
 	basis::Basis,
+	blocksize::{effective_block_size, effective_root_hermite},
 	gso::{profile_exact, profile_f64, Profile, CERTIFIED_TOLERANCE},
 	instance::{Instance, Q},
 	modp::{determinant, next_prime, Mont},
@@ -97,6 +98,12 @@ pub struct Score {
 	pub first_over_gh: f64,
 	/// Least-squares slope of the log Gram–Schmidt profile.
 	pub slope: f64,
+	/// Root Hermite factor of the equilibrium BKZ profile with this
+	/// potential (see [`crate::blocksize`]); `None` without any reduction.
+	pub effective_root_hermite: Option<f64>,
+	/// Block size whose equilibrium BKZ profile has this potential; `None`
+	/// below LLL quality.
+	pub effective_block_size: Option<f64>,
 	/// `ln ‖b*_i‖` for every row.
 	pub log_profile: Vec<f64>,
 }
@@ -119,6 +126,8 @@ impl Score {
 			shortest_row_norm,
 			first_over_gh: (first_norm.ln() - profile.log_gaussian_heuristic()).exp(),
 			slope: profile.slope(),
+			effective_root_hermite: effective_root_hermite(instance, potential),
+			effective_block_size: effective_block_size(instance, potential),
 			log_profile: profile.log_norms,
 		}
 	}
