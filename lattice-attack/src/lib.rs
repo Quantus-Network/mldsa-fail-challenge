@@ -12,11 +12,14 @@
 //!   exactly that a submission generates the whole lattice.
 //! - [`verify`] decides whether a submitted basis generates the instance's lattice and scores it by
 //!   log-potential improvement.
+//! - [`blocksize`] reads that potential as an effective BKZ block size, the number the leaderboard
+//!   shows.
 //! - [`harness`] defines the [`Reducer`] trait contestants implement, runs one under a wall-clock
 //!   budget, and produces a [`Report`].
 //! - [`reducers`] holds the reference implementations (LLL, progressive BKZ).
 
 pub mod basis;
+pub mod blocksize;
 pub mod gso;
 pub mod harness;
 pub mod instance;

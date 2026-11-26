@@ -1,0 +1,13 @@
+# Attribution shown next to the result on mldsa.fail. Fill in before opening a PR.
+
+# Short name for the approach.
+name = "Reference progressive BKZ"
+
+# The AI model that did the work, fully qualified ("Claude Opus 4.8", "GPT 5.6 Sol"), or "none".
+model = "none"
+
+# The coding agent or harness ("Cursor", "Codex", "Claude Code"), or "none".
+harness = "none"
+
+# One or two sentences on what changed and why.
+note = "Reference reducer: LLL, then BKZ tours with Schnorr-Euchner enumeration, block size rising from 10 to 60."

@@ -1,0 +1,10 @@
+[package]
+name = "submission"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "The contestant's reducer: the only crate a submission may change"
+
+[dependencies]
+qp-rusty-crystals-lattice-attack = { path = "../lattice-attack" }

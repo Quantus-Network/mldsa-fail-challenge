@@ -15,8 +15,7 @@ use std::{
 };
 
 use qp_rusty_crystals_lattice_attack::{
-	harness::{run, Budget, JsonlObserver, Observer, Report, StderrObserver, StepEvent},
-	instance::InstanceDescriptor,
+	harness::{run, Budget, JsonlObserver, Observer, Report, StderrObserver},
 	reducers::ProgressiveBkz,
 	verify::verify,
 	Instance, Variant,
@@ -139,7 +138,7 @@ fn main() -> ExitCode {
 	if let Some(ev) = &mut events {
 		observers.push(ev);
 	}
-	let report = run(&instance, reducer, &budget, &mut Fanout(observers));
+	let report = run(&instance, reducer, &budget, &mut observers);
 
 	let mut failed = false;
 	if let Some(ev) = events {
@@ -225,27 +224,5 @@ fn reverify(path: &str) -> ExitCode {
 			println!("rejected: {e}");
 			ExitCode::from(1)
 		},
-	}
-}
-
-struct Fanout<'a>(Vec<&'a mut dyn Observer>);
-
-impl Observer for Fanout<'_> {
-	fn on_start(&mut self, instance: &InstanceDescriptor, reducer: &str, budget: &Budget) {
-		for o in &mut self.0 {
-			o.on_start(instance, reducer, budget);
-		}
-	}
-
-	fn on_step(&mut self, event: &StepEvent) {
-		for o in &mut self.0 {
-			o.on_step(event);
-		}
-	}
-
-	fn on_finish(&mut self, report: &Report) {
-		for o in &mut self.0 {
-			o.on_finish(report);
-		}
 	}
 }
