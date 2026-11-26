@@ -51,19 +51,27 @@ def text(value):
 
 
 def finite(value):
-	return value if type(value) in (int, float) and math.isfinite(value) else None
+	"""A number JSON can round-trip exactly, or None. Python ints are unbounded, so the bound comes first."""
+	if type(value) not in (int, float) or not -(2**53) < value < 2**53:
+		return None
+	return value if math.isfinite(value) else None
 
 
 def count(value):
 	return value if type(value) is int and 0 <= value < 2**53 else None
 
 
-def load_untrusted(path, parse, errors):
-	"""A mapping from a contestant-written file, or empty if it is not one."""
+def load_untrusted(path, parse):
+	"""A mapping from a contestant-written file, or empty.
+
+	Nothing the file contains may stop publication: a missing file, bad
+	encoding, a syntax error, or a parser hitting its own limits (recursion
+	depth on deep nesting, integer-string size) all mean "no metadata".
+	"""
 	try:
 		value = parse(path.read_text())
-	except (FileNotFoundError, UnicodeDecodeError, *errors) as e:
-		print(f"ignoring {path.name}: {e}", file=sys.stderr)
+	except Exception as e:
+		print(f"ignoring {path.name}: {type(e).__name__}: {str(e)[:200]}", file=sys.stderr)
 		return {}
 	return value if isinstance(value, dict) else {}
 
@@ -71,8 +79,8 @@ def load_untrusted(path, parse, errors):
 def load_run(artifact, pr):
 	meta = load_json(artifact / "meta.json")
 	score = load_json(artifact / "score.json", {})
-	report = load_untrusted(artifact / "report.json", json.loads, (ValueError,))
-	submission = load_untrusted(artifact / "SUBMISSION.toml", tomllib.loads, (tomllib.TOMLDecodeError,))
+	report = load_untrusted(artifact / "report.json", json.loads)
+	submission = load_untrusted(artifact / "SUBMISSION.toml", tomllib.loads)
 	self_reported = {
 		"termination": text(report.get("termination")),
 		"counted_steps": count(report.get("counted_steps")),
