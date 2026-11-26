@@ -85,7 +85,7 @@ jobs:
           test "$(git rev-list --parents -n 1 "$COMMIT" | wc -w)" -eq 2
           git merge-base --is-ancestor "$COMMIT^" origin/main
           test -z "$(git diff --name-only "$COMMIT^" "$COMMIT" | grep -v '^submission/' || true)"
-          git checkout -q main
+          git checkout -q main && git reset -q --hard origin/main
           git rm -r -q submission
           git checkout "$COMMIT" -- submission
           git add -A submission
