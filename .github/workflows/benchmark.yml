@@ -1,0 +1,208 @@
+# Runs one submission commit for the fixed budget and verifies what it left.
+#
+# Trust boundary: everything in this job runs as the `runner` user except the
+# build and execution of `bench`, which is the only binary that links the
+# submission. Those run as the unprivileged `contestant` user with no network.
+# The scored basis is whatever `contestant` had written to disk when the
+# budget (plus the harness grace) elapsed, copied out by this job at that
+# moment, and re-scored by the trusted `runner verify`. Nothing the sandboxed
+# process prints or writes afterwards affects the score.
+name: Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Submission commit (on a submissions/pr-<n> branch)
+        required: true
+      pr:
+        description: Pull request number
+        required: true
+      secs:
+        description: Budget override in seconds (smoke tests only)
+        default: ""
+      n:
+        description: Instance n override (smoke tests only)
+        default: ""
+      m:
+        description: Instance m override (smoke tests only)
+        default: ""
+
+permissions:
+  contents: read
+
+# One run at a time: timings are only comparable on an idle machine.
+concurrency:
+  group: benchmark
+  cancel-in-progress: false
+
+env:
+  COMMIT: ${{ inputs.commit }}
+  PR: ${{ inputs.pr }}
+  SECS: ${{ inputs.secs || vars.BENCH_SECS || '7200' }}
+  GRACE_SECS: 5
+  # Backstop only: the harness enforces the budget; this kills a process that
+  # ignores it while still leaving time for a normal exit.
+  KILL_AFTER_SECS: 900
+  WORK: /work
+  OUT: /work/out
+  CARGO_TERM_COLOR: never
+
+jobs:
+  bench:
+    runs-on: ${{ vars.BENCH_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+
+      - name: Check this is a submission commit
+        run: |
+          git fetch --no-tags origin main
+          test "$(git rev-list --parents -n 1 HEAD | wc -w)" -eq 2
+          parent=$(git rev-parse HEAD^)
+          git merge-base --is-ancestor "$parent" origin/main
+          test -z "$(git diff --name-only "$parent" HEAD | grep -v '^submission/' || true)"
+
+      - name: Install toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
+          cargo fetch --locked
+
+      - name: Build the trusted runner
+        run: cargo build --release --locked --offline -p runner
+
+      - name: Create the sandbox user
+        run: |
+          sudo useradd --system --create-home --shell /usr/sbin/nologin contestant
+          sudo iptables -I OUTPUT -m owner --uid-owner contestant -j REJECT
+          sudo ip6tables -I OUTPUT -m owner --uid-owner contestant -j REJECT
+          chmod -R a+rX "$HOME/.rustup"
+          sudo mkdir -p "$WORK/src" "$WORK/.cargo" "$OUT"
+          sudo rsync -a --exclude target ./ "$WORK/src/"
+          sudo cp -r "$HOME/.cargo/registry" "$WORK/.cargo/registry"
+          sudo chown -R contestant:contestant "$WORK"
+          toolchain_bin=$(dirname "$(rustup which cargo)")
+          sandbox="sudo -u contestant env HOME=/home/contestant PATH=$toolchain_bin:/usr/bin:/bin RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$WORK/.cargo"
+          echo "SANDBOX=$sandbox" >> "$GITHUB_ENV"
+          $sandbox sh -c 'curl -sS --max-time 5 https://api.github.com >/dev/null 2>&1 && exit 1 || echo "network blocked"'
+
+      - name: Build the submission (sandboxed)
+        run: |
+          cd "$WORK/src"
+          $SANDBOX cargo build --release --locked --offline -p bench 2>&1 | tail -n 40
+          test -x "$WORK/src/target/release/bench"
+
+      - name: Derive the seed from drand
+        id: seed
+        run: |
+          beacon=$(curl -fsS --retry 5 --retry-delay 10 https://api.drand.sh/public/latest)
+          round=$(echo "$beacon" | jq -r .round)
+          randomness=$(echo "$beacon" | jq -r .randomness)
+          seed=$(target/release/runner seed --randomness "$randomness" --commit "$COMMIT")
+          echo "round=$round" >> "$GITHUB_OUTPUT"
+          echo "randomness=$randomness" >> "$GITHUB_OUTPUT"
+          echo "seed=$seed" >> "$GITHUB_OUTPUT"
+          echo "drand round $round, seed $seed"
+
+      - name: Run the submission (sandboxed)
+        id: run
+        env:
+          SEED: ${{ steps.seed.outputs.seed }}
+          N: ${{ inputs.n }}
+          M: ${{ inputs.m }}
+        run: |
+          mkdir -p trusted
+          instance_flags=""
+          if [ -n "$N" ]; then instance_flags="--n $N --m $M"; fi
+          started=$(date -u +%FT%TZ)
+          echo "started=$started" >> "$GITHUB_OUTPUT"
+          # shellcheck disable=SC2086
+          $SANDBOX timeout -s KILL $((SECS + KILL_AFTER_SECS)) \
+            "$WORK/src/target/release/bench" --seed "$SEED" --secs "$SECS" $instance_flags \
+            --snapshot-secs 10 --basis "$OUT/basis.bin" --report "$OUT/report.json" --events "$OUT/events.jsonl" \
+            > "$OUT/bench.log" 2>&1 &
+          bench_pid=$!
+          sleep $((SECS + GRACE_SECS + 10))
+          cp "$OUT/basis.bin" trusted/basis.bin
+          echo "basis taken at $(date -u +%FT%TZ)"
+          wait $bench_pid && status=0 || status=$?
+          echo "bench exit $status"
+          echo "exit=$status" >> "$GITHUB_OUTPUT"
+          echo "finished=$(date -u +%FT%TZ)" >> "$GITHUB_OUTPUT"
+          echo "instance_flags=$instance_flags" >> "$GITHUB_OUTPUT"
+          sudo cp "$OUT"/bench.log "$OUT"/report.json "$OUT"/events.jsonl trusted/ 2>/dev/null || true
+          sudo chown -R "$(id -u)" trusted
+          tail -n 5 trusted/bench.log || true
+
+      - name: Verify (trusted)
+        id: verify
+        env:
+          SEED: ${{ steps.seed.outputs.seed }}
+        run: |
+          # shellcheck disable=SC2086
+          target/release/runner verify --seed "$SEED" ${{ steps.run.outputs.instance_flags }} \
+            --basis trusted/basis.bin --score trusted/score.json && echo "status=accepted" >> "$GITHUB_OUTPUT" || echo "status=rejected" >> "$GITHUB_OUTPUT"
+          test -s trusted/score.json
+
+      # Always written, so that publish can record a failed run against its
+      # pull request even when an earlier step aborted.
+      - name: Record metadata
+        if: always()
+        env:
+          PR_INPUT: ${{ inputs.pr }}
+          STARTED: ${{ steps.run.outputs.started }}
+          FINISHED: ${{ steps.run.outputs.finished }}
+          DRAND_ROUND: ${{ steps.seed.outputs.round }}
+          DRAND_RANDOMNESS: ${{ steps.seed.outputs.randomness }}
+          SEED: ${{ steps.seed.outputs.seed }}
+          BENCH_EXIT: ${{ steps.run.outputs.exit }}
+          RUNNER_LABEL: ${{ vars.BENCH_RUNNER || 'ubuntu-latest' }}
+          SMOKE: ${{ inputs.n != '' || inputs.secs != '' }}
+        run: |
+          mkdir -p trusted
+          jq -n \
+            --arg commit "$COMMIT" \
+            --argjson pr "$PR_INPUT" \
+            --arg started "$STARTED" \
+            --arg finished "$FINISHED" \
+            --argjson budget_secs "$SECS" \
+            --argjson drand_round "${DRAND_ROUND:-null}" \
+            --arg drand_randomness "$DRAND_RANDOMNESS" \
+            --arg seed "$SEED" \
+            --arg runner_label "$RUNNER_LABEL" \
+            --arg cpu "$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)" \
+            --argjson vcpus "$(nproc)" \
+            --argjson bench_exit "${BENCH_EXIT:-null}" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --argjson smoke "$SMOKE" \
+            '{commit: $commit, pr: $pr, started: $started, finished: $finished, budget_secs: $budget_secs,
+              drand: {round: $drand_round, randomness: $drand_randomness}, seed: $seed,
+              runner: {label: $runner_label, cpu: $cpu, vcpus: $vcpus},
+              bench_exit: $bench_exit, run_id: $run_id, run_url: $run_url, smoke: $smoke}' \
+            > trusted/meta.json
+          cp submission/SUBMISSION.toml trusted/ 2>/dev/null || true
+          if [ -s trusted/score.json ]; then
+            {
+              echo "### Submission \`${COMMIT:0:12}\` (PR #$PR)"
+              echo
+              echo '```'
+              jq 'del(.log_profile)' trusted/score.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: run
+          path: trusted
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Report the verdict
+        run: test "${{ steps.verify.outputs.status }}" = accepted

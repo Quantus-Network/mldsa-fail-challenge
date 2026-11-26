@@ -1,0 +1,89 @@
+# Records a finished benchmark, promotes a new record to main, tells the PR
+# and the site. Runs from main's copy of this file, never from a submission.
+name: Publish
+
+on:
+  workflow_run:
+    workflows: [Benchmark]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  RUN_ID: ${{ github.event.workflow_run.id }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Download the run artifact
+        run: gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" -n run -D artifact
+
+      - name: Load the records branch
+        run: |
+          git config user.name "mldsa.fail"
+          git config user.email "mldsa.fail@users.noreply.github.com"
+          if git fetch --no-tags origin records; then
+            git worktree add records origin/records
+          else
+            git worktree add --detach records
+            git -C records checkout --orphan records
+            git -C records rm -rfq .
+          fi
+
+      - name: Fold the run into the records
+        id: fold
+        run: |
+          pr=$(jq -r .pr artifact/meta.json)
+          gh pr view "$pr" --repo "$GITHUB_REPOSITORY" --json author,title > pr.json
+          python3 .github/scripts/publish.py artifact records pr.json "${{ vars.PROMOTION_MARGIN_BITS || '0' }}" > decision.json
+          jq . decision.json
+          {
+            echo "pr=$pr"
+            echo "promote=$(jq -r .promote decision.json)"
+            echo "commit=$(jq -r .commit artifact/meta.json)"
+          } >> "$GITHUB_OUTPUT"
+          cd records
+          git add -A
+          git commit -q -m "Run $RUN_ID: PR #$pr, $(jq -r .status ../decision.json)"
+          git push origin HEAD:refs/heads/records
+
+      - name: Promote to main
+        if: steps.fold.outputs.promote == 'true'
+        env:
+          COMMIT: ${{ steps.fold.outputs.commit }}
+          PR: ${{ steps.fold.outputs.pr }}
+        run: |
+          git fetch --no-tags origin main "$COMMIT"
+          git checkout -q main
+          git rm -r -q submission
+          git checkout "$COMMIT" -- submission
+          git add -A submission
+          git diff --cached --quiet || git commit -q -m "Record: PR #$PR" -m "Submission commit $COMMIT, benchmark run $RUN_ID."
+          git push origin HEAD:main
+
+      - name: Comment on the pull request
+        run: |
+          jq -r .comment decision.json > comment.md
+          gh pr comment "${{ steps.fold.outputs.pr }}" --repo "$GITHUB_REPOSITORY" --body-file comment.md
+
+      - name: Notify the site
+        if: vars.SITE_REPOSITORY != '' && secrets.SITE_DISPATCH_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
+        run: |
+          gh api "repos/${{ vars.SITE_REPOSITORY }}/dispatches" \
+            -f event_type=records-updated -f 'client_payload[run_id]'="$RUN_ID"
