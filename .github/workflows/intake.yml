@@ -1,0 +1,75 @@
+# Turns a labelled pull request into a submission commit and queues a run.
+#
+# Runs in the base repository's context (pull_request_target) with write
+# access, so it never executes anything from the pull request: it only copies
+# the PR's `submission/` directory onto `main` and records the result on a
+# `submissions/pr-<n>` branch. The `run` label is the maintainer's approval
+# for one benchmark run and is removed as soon as the run is queued.
+name: Intake
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: intake-${{ github.event.pull_request.number }}
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  PR: ${{ github.event.pull_request.number }}
+  PR_HEAD: ${{ github.event.pull_request.head.sha }}
+  PR_TITLE: ${{ github.event.pull_request.title }}
+  PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+  PR_AUTHOR_ID: ${{ github.event.pull_request.user.id }}
+
+jobs:
+  intake:
+    if: github.event.label.name == 'run'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Consume the run label
+        run: gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --remove-label run
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Fetch the pull request head
+        run: git fetch --no-tags origin "pull/$PR/head:pr-head" && test "$(git rev-parse pr-head)" = "$PR_HEAD"
+
+      - name: Reject changes outside submission/
+        run: |
+          outside=$(git diff --name-only "$(git merge-base main pr-head)" pr-head | grep -v '^submission/' || true)
+          if [ -n "$outside" ]; then
+            printf 'This pull request changes files outside `submission/`, which is the only editable path:\n\n```\n%s\n```\n\nSee CHALLENGE.md.\n' "$outside" > reason.md
+            gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file reason.md
+            exit 1
+          fi
+
+      - name: Build the submission commit
+        id: commit
+        run: |
+          git config user.name "mldsa.fail"
+          git config user.email "mldsa.fail@users.noreply.github.com"
+          git rm -r -q submission
+          git checkout pr-head -- submission
+          git add -A submission
+          git commit -q -m "PR #$PR: $PR_TITLE" -m "Submission $PR_HEAD by @$PR_AUTHOR, replayed onto main $(git rev-parse --short main)." \
+            --author="$PR_AUTHOR <$PR_AUTHOR_ID+$PR_AUTHOR@users.noreply.github.com>"
+          test -z "$(git diff --name-only main HEAD | grep -v '^submission/' || true)"
+          git push -f origin "HEAD:refs/heads/submissions/pr-$PR"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Queue the benchmark
+        run: |
+          gh workflow run benchmark.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            -f commit="${{ steps.commit.outputs.sha }}" -f pr="$PR"
+          printf 'Queued a benchmark run for %s as submission commit `%s`. Results are posted here when the run finishes; progress is under [Actions](%s/actions/workflows/benchmark.yml).\n' \
+            "$PR_HEAD" "${{ steps.commit.outputs.sha }}" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" > queued.md
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file queued.md
