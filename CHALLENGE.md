@@ -23,13 +23,15 @@ basis. The lattice-estimator puts full key recovery at BKZ block size
 ## What is measured
 
 The trusted verifier re-derives the instance from the seed and checks that
-the basis you left behind generates the same lattice: exact membership plus
-determinant checks modulo hashed 62-bit primes. It then computes the
-log-potential of the Gram–Schmidt profile in exact arithmetic.
+the basis you left behind generates the same lattice: exact integer
+membership plus determinant checks modulo three primes in `[2^62, 2^63)`
+derived by hashing the basis. It then computes the log-potential of the
+Gram–Schmidt profile from the exact integer Gram matrix with big-integer
+Cholesky, certified to within 10⁻⁶ nats.
 
 - **`score_bits`** `= (P(B₀) − P(B)) / ln 2`, the decrease in log-potential
-  from the starting basis. This is the ranking metric: it is exact, and every
-  LLL swap and every BKZ insertion decreases it.
+  from the starting basis. This is the ranking metric: every LLL swap and
+  every BKZ insertion decreases it.
 - **`β_eff`** is the headline number. It is the block size at which an
   idealised BKZ (Z-shaped profile on a q-ary lattice, GSA slope from the
   root Hermite factor) would reach the same log-potential. It is a monotone
@@ -101,7 +103,10 @@ Your crate is built and run as an unprivileged user with no network access.
 
 ## Comparability
 
-Two runs of the same code differ by the seed and by timing noise. The
-promotion margin absorbs that noise; its value and the measured spread on
-the reference runner are published with the calibration. Smoke-test runs
-with a reduced budget or instance are recorded but never ranked.
+Two runs of the same code differ by the seed and by timing noise. A run takes
+the record only if it beats the standing score by more than the promotion
+margin (`PROMOTION_MARGIN_BITS`, a repository variable; zero until the spread
+on the reference runner has been measured, at which point the measured value
+is published here). Smoke-test runs with a reduced budget or instance are
+recorded but never ranked. Runs are recorded once: re-running a benchmark
+attempt does not change what was recorded for that run.

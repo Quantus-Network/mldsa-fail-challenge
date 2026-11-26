@@ -32,6 +32,13 @@ keep it true when changing anything it describes.
   `report.json`, `events.jsonl` or the process exit code.
 - Scores come from `runner verify` on the basis copied out at the deadline.
   Do not add any other path from a run to a number on the board.
+- Every contestant-controlled input crosses the boundary through one guarded
+  path, and a new one must too. Files from the sandbox: imported while the
+  cgroup is frozen, regular file, bounded size. Files from the submission
+  commit: read from the git object store, regular mode, bounded size.
+  Contestant text (report values, `SUBMISSION.toml`, PR title): typed and
+  bounded in `publish.py`, strict JSON out. Contestant stdout: only inside
+  `::stop-commands::` markers. The sandbox never sees `.git` or a token.
 - `intake` and `publish` run from `main` with write access
   (`pull_request_target`, `workflow_run`). They must never check out, build
   or execute pull request content; copying files is the limit.

@@ -83,7 +83,11 @@ jobs:
         with:
           ref: ${{ inputs.commit }}
           fetch-depth: 0
+          persist-credentials: false
 
+      # One commit on top of main touching only submission/, holding only
+      # regular files: no symlinks or submodules that could point the build or
+      # the metadata copy at something outside the submission.
       - name: Check this is a submission commit
         run: |
           git fetch --no-tags origin main
@@ -91,6 +95,7 @@ jobs:
           parent=$(git rev-parse HEAD^)
           git merge-base --is-ancestor "$parent" origin/main
           test -z "$(git diff --name-only "$parent" HEAD | grep -v '^submission/' || true)"
+          test -z "$(git ls-tree -r HEAD submission | awk '$1 != "100644" && $1 != "100755"')"
 
       - name: Install toolchain
         run: |
@@ -108,7 +113,7 @@ jobs:
           sudo ip6tables -I OUTPUT -m owner --uid-owner contestant -j REJECT
           chmod o+x "$HOME" && chmod -R a+rX "$HOME/.rustup"
           sudo mkdir -p "$WORK/src" "$WORK/.cargo" "$OUT"
-          sudo rsync -a --exclude target ./ "$WORK/src/"
+          sudo rsync -a --exclude target --exclude .git ./ "$WORK/src/"
           sudo cp -r "$HOME/.cargo/registry" "$WORK/.cargo/registry"
           sudo chown -R contestant:contestant "$WORK"
           sudo mkdir "$CGROUP"
@@ -124,10 +129,15 @@ jobs:
           sudo /usr/local/bin/sandboxed sh -c 'curl -sS --max-time 5 https://api.github.com >/dev/null 2>&1 && exit 1 || echo "network blocked"'
           sudo /usr/local/bin/sandboxed sh -c 'test "$(cat /proc/self/cgroup)" = "0::/contestant" && ! echo 0 > '"$CGROUP"'/cgroup.freeze 2>/dev/null && echo "cgroup confined"'
 
+      # Contestant output reaches the job log only between stop-commands
+      # markers, so it cannot issue workflow commands.
       - name: Build the submission (sandboxed)
         run: |
           cd "$WORK/src"
+          guard=$(openssl rand -hex 16)
+          echo "::stop-commands::$guard"
           $SANDBOX cargo build --release --locked --offline -p bench 2>&1 | tail -n 40
+          echo "::$guard::"
           test -x "$WORK/src/target/release/bench"
           # Nothing a build script started survives into the run.
           echo 1 | sudo tee "$CGROUP/cgroup.kill" >/dev/null
@@ -203,22 +213,28 @@ jobs:
           echo "bench exit $status"
           echo "exit=$status" >> "$GITHUB_OUTPUT"
           echo "finished=$(date -u +%FT%TZ)" >> "$GITHUB_OUTPUT"
-          echo "instance_flags=$instance_flags" >> "$GITHUB_OUTPUT"
           if freeze; then
             import_file "$OUT/report.json" trusted/report.json $((64 * 1024 * 1024)) || true
             import_file "$OUT/events.jsonl" trusted/events.jsonl $((64 * 1024 * 1024)) || true
           fi
           echo 1 | sudo tee "$CGROUP/cgroup.kill" >/dev/null
+          guard=$(openssl rand -hex 16)
+          echo "::stop-commands::$guard"
           tail -n 5 trusted/bench.log || true
+          echo "::$guard::"
           test -s trusted/basis.bin
 
       - name: Verify (trusted)
         id: verify
         env:
           SEED: ${{ steps.seed.outputs.seed }}
+          N: ${{ inputs.n }}
+          M: ${{ inputs.m }}
         run: |
+          instance_flags=""
+          if [ -n "$N" ]; then instance_flags="--n $N --m $M"; fi
           # shellcheck disable=SC2086
-          target/release/runner verify --seed "$SEED" ${{ steps.run.outputs.instance_flags }} \
+          target/release/runner verify --seed "$SEED" $instance_flags \
             --basis trusted/basis.bin --score trusted/score.json && echo "status=accepted" >> "$GITHUB_OUTPUT" || echo "status=rejected" >> "$GITHUB_OUTPUT"
           test -s trusted/score.json
 
@@ -259,7 +275,11 @@ jobs:
               runner: {label: $runner_label, cpu: $cpu, vcpus: $vcpus},
               bench_exit: $bench_exit, run_id: $run_id, run_url: $run_url, smoke: $smoke}' \
             > trusted/meta.json
-          cp submission/SUBMISSION.toml trusted/ 2>/dev/null || true
+          # From the object store, never the working tree, and bounded.
+          toml=HEAD:submission/SUBMISSION.toml
+          if git cat-file -e "$toml" 2>/dev/null && [ "$(git cat-file -s "$toml")" -le 65536 ]; then
+            git cat-file blob "$toml" > trusted/SUBMISSION.toml
+          fi
           if [ -s trusted/score.json ]; then
             {
               echo "### Submission \`${COMMIT:0:12}\` (PR #$PR)"
