@@ -67,8 +67,11 @@ jobs:
             echo "record_commit=$(jq -r .record_commit decision.json)"
             echo "record_id=$(jq -r .record_id decision.json)"
           } >> "$GITHUB_OUTPUT"
+          # A rerun after a failed promotion folds the same artifact to the
+          # same bytes; it must still reach the promotion step below.
           cd records
           git add -A
+          git diff --cached --quiet && exit 0
           git commit -q -m "Run $RUN_ID: PR #$pr, $(jq -r .status ../decision.json)"
           git push origin HEAD:refs/heads/records
 
@@ -94,6 +97,7 @@ jobs:
           python3 .github/scripts/publish.py mark-promoted records "$RECORD_ID"
           cd records
           git add -A
+          git diff --cached --quiet && exit 0
           git commit -q -m "Run $RECORD_ID is on main"
           git push origin HEAD:refs/heads/records
 

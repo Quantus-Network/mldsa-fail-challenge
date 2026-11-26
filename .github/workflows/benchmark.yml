@@ -4,9 +4,9 @@
 # build and execution of `bench`, which is the only binary that links the
 # submission. Those run as the unprivileged `contestant` user with no network.
 # The scored basis is whatever `contestant` had written to disk when the
-# budget (plus the harness grace) elapsed: at that moment every sandbox
-# process is frozen, the file is imported if it is a plain regular file of
-# sane size, and the trusted `runner verify` scores the imported copy.
+# budget (plus the harness grace) elapsed: at that moment the sandbox cgroup
+# is frozen, the file is imported if it is a plain regular file of sane size,
+# and the trusted `runner verify` scores the imported copy.
 # Nothing the sandboxed process prints or writes afterwards affects the score.
 name: Benchmark
 
@@ -67,6 +67,11 @@ env:
   KILL_AFTER_SECS: 900
   WORK: /work
   OUT: /work/out
+  # Every sandboxed process lives in this cgroup (root-owned, not delegated,
+  # so the contestant can neither leave it nor touch its control files).
+  # Freezing it stops every process in it until it is thawed, unlike SIGSTOP,
+  # which a pre-armed timer signalling SIGCONT undoes.
+  CGROUP: /sys/fs/cgroup/contestant
   CARGO_TERM_COLOR: never
 
 jobs:
@@ -106,16 +111,27 @@ jobs:
           sudo rsync -a --exclude target ./ "$WORK/src/"
           sudo cp -r "$HOME/.cargo/registry" "$WORK/.cargo/registry"
           sudo chown -R contestant:contestant "$WORK"
+          sudo mkdir "$CGROUP"
+          test -f "$CGROUP/cgroup.freeze"
           toolchain_bin=$(dirname "$(rustup which cargo)")
-          sandbox="sudo -u contestant env HOME=/home/contestant PATH=$toolchain_bin:/usr/bin:/bin RUSTUP_HOME=$HOME/.rustup CARGO_HOME=$WORK/.cargo"
-          echo "SANDBOX=$sandbox" >> "$GITHUB_ENV"
-          $sandbox sh -c 'curl -sS --max-time 5 https://api.github.com >/dev/null 2>&1 && exit 1 || echo "network blocked"'
+          sudo tee /usr/local/bin/sandboxed >/dev/null <<EOF
+          #!/bin/sh
+          echo \$\$ > "$CGROUP/cgroup.procs"
+          exec sudo -u contestant env HOME=/home/contestant PATH="$toolchain_bin:/usr/bin:/bin" RUSTUP_HOME="$HOME/.rustup" CARGO_HOME="$WORK/.cargo" "\$@"
+          EOF
+          sudo chmod 755 /usr/local/bin/sandboxed
+          echo "SANDBOX=sudo /usr/local/bin/sandboxed" >> "$GITHUB_ENV"
+          sudo /usr/local/bin/sandboxed sh -c 'curl -sS --max-time 5 https://api.github.com >/dev/null 2>&1 && exit 1 || echo "network blocked"'
+          sudo /usr/local/bin/sandboxed sh -c 'test "$(cat /proc/self/cgroup)" = "0::/contestant" && ! echo 0 > '"$CGROUP"'/cgroup.freeze 2>/dev/null && echo "cgroup confined"'
 
       - name: Build the submission (sandboxed)
         run: |
           cd "$WORK/src"
           $SANDBOX cargo build --release --locked --offline -p bench 2>&1 | tail -n 40
           test -x "$WORK/src/target/release/bench"
+          # Nothing a build script started survives into the run.
+          echo 1 | sudo tee "$CGROUP/cgroup.kill" >/dev/null
+          test -z "$(cat "$CGROUP/cgroup.procs")"
 
       - name: Derive the seed from drand
         id: seed
@@ -148,10 +164,23 @@ jobs:
             > trusted/bench.log 2>&1 &
           bench_pid=$!
 
-          # Imports a sandbox file while every sandbox process is frozen, so
-          # the file cannot change under us. Only plain regular files within
-          # the size bound are accepted, read as the sandbox user so a link to
-          # anything else on the host is unreadable rather than copied.
+          # Freezes the sandbox cgroup and returns once the kernel reports
+          # every process in it frozen; nothing in it runs again until thawed.
+          freeze() {
+            echo 1 | sudo tee "$CGROUP/cgroup.freeze" >/dev/null
+            for _ in $(seq 600); do
+              grep -q '^frozen 1$' "$CGROUP/cgroup.events" && return 0
+              sleep 0.1
+            done
+            echo "sandbox did not freeze"
+            return 1
+          }
+          thaw() { echo 0 | sudo tee "$CGROUP/cgroup.freeze" >/dev/null; }
+
+          # Imports a sandbox file, to be called only while frozen. Only plain
+          # regular files within the size bound are accepted, read as the
+          # sandbox user (outside the cgroup) so a link to anything else on
+          # the host is unreadable rather than copied.
           import_file() {
             local src=$1 dst=$2 max=$3 kind size
             kind=$(sudo -u contestant stat -c %F -- "$src" 2>/dev/null) || { echo "$src: missing"; return 1; }
@@ -162,10 +191,12 @@ jobs:
             fi
             sudo -u contestant cat -- "$src" > "$dst"
           }
-          frozen() { sudo pkill -STOP -u contestant || true; "$@"; local rc=$?; sudo pkill -CONT -u contestant || true; return $rc; }
 
           sleep $((SECS + GRACE_SECS + 10))
-          frozen import_file "$OUT/basis.bin" trusted/basis.bin $((256 * 1024 * 1024)) || true
+          if freeze; then
+            import_file "$OUT/basis.bin" trusted/basis.bin $((256 * 1024 * 1024)) || true
+          fi
+          thaw
           echo "basis taken at $(date -u +%FT%TZ)"
 
           wait $bench_pid && status=0 || status=$?
@@ -173,10 +204,11 @@ jobs:
           echo "exit=$status" >> "$GITHUB_OUTPUT"
           echo "finished=$(date -u +%FT%TZ)" >> "$GITHUB_OUTPUT"
           echo "instance_flags=$instance_flags" >> "$GITHUB_OUTPUT"
-          sudo pkill -STOP -u contestant || true
-          import_file "$OUT/report.json" trusted/report.json $((64 * 1024 * 1024)) || true
-          import_file "$OUT/events.jsonl" trusted/events.jsonl $((64 * 1024 * 1024)) || true
-          sudo pkill -KILL -u contestant || true
+          if freeze; then
+            import_file "$OUT/report.json" trusted/report.json $((64 * 1024 * 1024)) || true
+            import_file "$OUT/events.jsonl" trusted/events.jsonl $((64 * 1024 * 1024)) || true
+          fi
+          echo 1 | sudo tee "$CGROUP/cgroup.kill" >/dev/null
           tail -n 5 trusted/bench.log || true
           test -s trusted/basis.bin
 
