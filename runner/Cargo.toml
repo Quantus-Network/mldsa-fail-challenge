@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 license = "Apache-2.0"
-description = "Times the submission on a fresh instance and verifies the basis it leaves behind"
+description = "Trusted seed derivation and verification; never links the submission"
 
 [dependencies]
 hex = { workspace = true, features = ["std"] }
@@ -12,4 +12,3 @@ qp-rusty-crystals-dilithium = { workspace = true }
 qp-rusty-crystals-lattice-attack = { path = "../lattice-attack" }
 serde = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
-submission = { path = "../submission" }

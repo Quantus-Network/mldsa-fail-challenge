@@ -1,7 +1,7 @@
 //! Integer lattice basis: the type exchanged between the harness, reducers and
 //! the verifier.
 
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Write};
 
 use num_bigint::BigInt;
 use num_traits::FromPrimitive;
@@ -69,40 +69,24 @@ impl Basis {
 		w.write_all(&buf)
 	}
 
-	/// Inverse of [`Self::write_binary`]. Rejects trailing bytes and rows
-	/// beyond [`MAX_BINARY_DIM`].
-	pub fn read_binary(mut r: impl Read) -> io::Result<Basis> {
-		let mut bytes = Vec::new();
-		r.read_to_end(&mut bytes)?;
-		let header = BINARY_MAGIC.len() + 4;
-		if bytes.len() < header || &bytes[..BINARY_MAGIC.len()] != BINARY_MAGIC {
+	/// Inverse of [`Self::write_binary`] for a basis of exactly `dim` rows.
+	/// Streams the input, so an untrusted file never costs more memory than
+	/// the `dim × dim` basis it claims to hold; rejects any other dimension
+	/// and trailing bytes.
+	pub fn read_binary(mut r: impl BufRead, dim: usize) -> io::Result<Basis> {
+		let mut header = [0u8; BINARY_MAGIC.len() + 4];
+		r.read_exact(&mut header)?;
+		if &header[..BINARY_MAGIC.len()] != BINARY_MAGIC {
 			return Err(invalid("not a basis file"));
 		}
-		let d = u32::from_le_bytes(bytes[BINARY_MAGIC.len()..header].try_into().unwrap()) as usize;
-		if d > MAX_BINARY_DIM {
-			return Err(invalid("dimension too large"));
+		if u32::from_le_bytes(header[BINARY_MAGIC.len()..].try_into().unwrap()) != dim as u32 {
+			return Err(invalid("unexpected dimension"));
 		}
-		let mut cursor = header;
-		let mut next = || -> io::Result<i64> {
-			let (mut value, mut shift) = (0u64, 0u32);
-			loop {
-				let &byte = bytes.get(cursor).ok_or_else(|| invalid("truncated"))?;
-				cursor += 1;
-				if shift >= 64 {
-					return Err(invalid("varint too long"));
-				}
-				value |= u64::from(byte & 0x7f) << shift;
-				if byte < 0x80 {
-					return Ok(((value >> 1) as i64) ^ -((value & 1) as i64));
-				}
-				shift += 7;
-			}
-		};
-		let mut rows = Vec::with_capacity(d);
-		for _ in 0..d {
-			rows.push((0..d).map(|_| next()).collect::<io::Result<Vec<i64>>>()?);
+		let mut rows = Vec::with_capacity(dim);
+		for _ in 0..dim {
+			rows.push((0..dim).map(|_| read_varint(&mut r)).collect::<io::Result<Vec<i64>>>()?);
 		}
-		if cursor != bytes.len() {
+		if !r.fill_buf()?.is_empty() {
 			return Err(invalid("trailing bytes"));
 		}
 		Ok(Basis { rows })
@@ -111,9 +95,21 @@ impl Basis {
 
 const BINARY_MAGIC: &[u8] = b"mldsa.fail basis v1\n";
 
-/// Largest dimension [`Basis::read_binary`] accepts; the full ML-DSA-87
-/// lattice has `d = 4097`.
-pub const MAX_BINARY_DIM: usize = 1 << 14;
+fn read_varint(r: &mut impl BufRead) -> io::Result<i64> {
+	let (mut value, mut shift) = (0u64, 0u32);
+	loop {
+		let byte = *r.fill_buf()?.first().ok_or_else(|| invalid("truncated"))?;
+		r.consume(1);
+		if shift >= 64 {
+			return Err(invalid("varint too long"));
+		}
+		value |= u64::from(byte & 0x7f) << shift;
+		if byte < 0x80 {
+			return Ok(((value >> 1) as i64) ^ -((value & 1) as i64));
+		}
+		shift += 7;
+	}
+}
 
 fn invalid(msg: &str) -> io::Error {
 	io::Error::new(io::ErrorKind::InvalidData, msg)
@@ -154,6 +150,8 @@ pub(crate) fn sub_multiple_big(row_k: &mut [BigInt], row_j: &[i64], c: f64, from
 
 #[cfg(test)]
 mod tests {
+	use std::io::Read;
+
 	use super::*;
 
 	#[test]
@@ -166,7 +164,7 @@ mod tests {
 		let mut bytes = Vec::new();
 		basis.write_binary(&mut bytes).unwrap();
 		assert_eq!(&bytes[..BINARY_MAGIC.len()], BINARY_MAGIC);
-		assert_eq!(Basis::read_binary(&bytes[..]).unwrap(), basis);
+		assert_eq!(Basis::read_binary(&bytes[..], 3).unwrap(), basis);
 	}
 
 	#[test]
@@ -174,13 +172,34 @@ mod tests {
 		let basis = Basis::new(vec![vec![5, 6], vec![7, 8]]);
 		let mut bytes = Vec::new();
 		basis.write_binary(&mut bytes).unwrap();
-		assert!(Basis::read_binary(&bytes[..bytes.len() - 1]).is_err());
+		assert!(Basis::read_binary(&bytes[..bytes.len() - 1], 2).is_err());
+		assert!(Basis::read_binary(&bytes[..], 3).is_err());
 		bytes.push(0);
-		assert!(Basis::read_binary(&bytes[..]).is_err());
-		assert!(Basis::read_binary(&b"nope"[..]).is_err());
-		let mut huge = BINARY_MAGIC.to_vec();
-		huge.extend_from_slice(&u32::MAX.to_le_bytes());
-		assert!(Basis::read_binary(&huge[..]).is_err());
+		assert!(Basis::read_binary(&bytes[..], 2).is_err());
+		assert!(Basis::read_binary(&b"nope"[..], 2).is_err());
 		assert!(Basis::new(vec![vec![1], vec![2, 3]]).write_binary(Vec::new()).is_err());
+	}
+
+	/// A claimed dimension is checked before any entry is read, and reading
+	/// stops at the first byte past the basis, so a padded or oversized file
+	/// never gets buffered.
+	#[test]
+	fn binary_read_is_bounded_by_the_expected_dimension() {
+		struct Endless(u8);
+		impl std::io::Read for Endless {
+			fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+				buf.fill(self.0);
+				Ok(buf.len())
+			}
+		}
+		let mut header = BINARY_MAGIC.to_vec();
+		header.extend_from_slice(&u32::MAX.to_le_bytes());
+		let oversized = std::io::BufReader::new(header.as_slice().chain(Endless(0)));
+		assert!(Basis::read_binary(oversized, 2).is_err());
+
+		let mut padded = Vec::new();
+		Basis::new(vec![vec![1]]).write_binary(&mut padded).unwrap();
+		let padded = std::io::BufReader::new(padded.as_slice().chain(Endless(0)));
+		assert_eq!(Basis::read_binary(padded, 1).unwrap_err().to_string(), "trailing bytes");
 	}
 }

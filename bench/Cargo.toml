@@ -1,0 +1,12 @@
+[package]
+name = "bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "Runs the submission under the timed harness; the only binary that links contestant code"
+
+[dependencies]
+qp-rusty-crystals-lattice-attack = { path = "../lattice-attack" }
+runner = { path = "../runner" }
+submission = { path = "../submission" }
