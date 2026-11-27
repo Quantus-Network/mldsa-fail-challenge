@@ -11,9 +11,13 @@ the pull request. A new record is written with `promotion: "pending"`;
 `mark-promoted` flips it to `"done"` once `main` holds the submission, so a
 failed push is retried by the next run rather than silently forgotten.
 
-Once the decision is printed, a non-smoke pull request is closed so finished
-submissions do not accumulate. Closing is best effort: a failure is logged
-and the records still publish. The next publication of that run tries again.
+`fold` then commits and pushes the records branch. It closes the pull request
+only after that push, and only when this run is not a promotion still waiting
+on `main`. `mark-promoted` runs after that push to `main`; it pushes the
+promotion flag and then closes. A failed push leaves the pull request open.
+A smoke test stays open. Closing is best effort: a failure is logged and the
+next publication of that run tries again. The workflow's own records commit
+is then empty, because this script already made it.
 
 Runs are immutable: folding a run id that is already recorded reuses the
 stored run (the artifact of a re-run attempt is not consulted) and only
@@ -155,8 +159,32 @@ CLOSE_NOTE = (
 )
 
 
+def git(records, *args):
+	result = subprocess.run(["git", *args], cwd=records, text=True, capture_output=True)
+	if result.returncode != 0:
+		print(result.stderr, file=sys.stderr)
+		raise RuntimeError(result.stderr.strip() or f"git {' '.join(args)} exited {result.returncode}")
+	return result
+
+
+def push_records(records, message):
+	"""Commit and push records. A clean tree is already published."""
+	if os.environ.get("GITHUB_ACTIONS") != "true":
+		return
+	git(records, "add", "-A")
+	diff = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=records, text=True, capture_output=True)
+	if diff.returncode == 0:
+		return
+	if diff.returncode != 1:
+		print(diff.stderr, file=sys.stderr)
+		raise RuntimeError(f"git diff exited {diff.returncode}")
+	git(records, "commit", "-q", "-m", message)
+	git(records, "push", "origin", "HEAD:refs/heads/records")
+
+
 def close_pull_request(pr, smoke):
-	# The records are already written. A failure here must not drop them; the next publication tries again.
+	# The records push, and the promotion when there is one, have already returned.
+	# A failure here must not fail the job; the next publication tries again.
 	if os.environ.get("GITHUB_ACTIONS") != "true" or smoke or type(pr) is not int or pr <= 0:
 		return
 	repo = os.environ.get("GITHUB_REPOSITORY", "")
@@ -206,15 +234,18 @@ def fold(artifact, records, pr_path, margin):
 
 	record = index["record"]
 	pending = record is not None and record["promotion"] == "pending"
-	print(json.dumps({
+	decision = {
 		"status": run["status"],
 		"promote": pending,
 		"record_commit": record["commit"] if pending else None,
 		"record_id": record["id"] if pending else None,
 		"comment": comment(run, record_before, new_record) if stored is None
 			else f"Run {run_id} was already recorded; this publication changed nothing.",
-	}))
-	close_pull_request(run.get("pr"), bool(run.get("smoke")))
+	}
+	push_records(records, f"Run {os.environ.get('RUN_ID', run_id)}: PR #{run.get('pr')}, {run['status']}")
+	print(json.dumps(decision))
+	if not (pending and record.get("id") == run_id):
+		close_pull_request(run.get("pr"), bool(run.get("smoke")))
 
 
 def mark_promoted(records, run_id):
@@ -226,6 +257,8 @@ def mark_promoted(records, run_id):
 		if entry and entry["id"] == run_id:
 			entry["promotion"] = "done"
 	write_records(records, index, run)
+	push_records(records, f"Run {run_id} is on main")
+	close_pull_request(run.get("pr"), bool(run.get("smoke")))
 
 
 def main():

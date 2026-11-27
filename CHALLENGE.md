@@ -82,8 +82,9 @@ later if still alive.
    the run log and the basis as artifacts. If it beats the standing record by
    more than `PROMOTION_MARGIN_BITS`, your `submission/` is committed to
    `main` and your name goes on the board at [mldsa.fail](https://mldsa.fail).
-   The pull request is then closed. A smoke test leaves it open. Merging the
-   pull request is not how a record lands on `main`.
+   The pull request is then closed. A smoke test leaves it open, and so does
+   a publication that did not finish. Merging the pull request is not how a
+   record lands on `main`.
 
 ## Dependencies and sandbox
 
