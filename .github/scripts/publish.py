@@ -11,6 +11,10 @@ the pull request. A new record is written with `promotion: "pending"`;
 `mark-promoted` flips it to `"done"` once `main` holds the submission, so a
 failed push is retried by the next run rather than silently forgotten.
 
+Once the decision is printed, a non-smoke pull request is closed so finished
+submissions do not accumulate. Closing is best effort: a failure is logged
+and the records still publish. The next publication of that run tries again.
+
 Runs are immutable: folding a run id that is already recorded reuses the
 stored run (the artifact of a re-run attempt is not consulted) and only
 recomputes the decision.
@@ -23,6 +27,8 @@ and anything else is dropped, never fatal. Everything written is strict JSON.
 
 import json
 import math
+import os
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -143,6 +149,35 @@ def comment(run, record_before, new_record):
 	return "\n".join(lines)
 
 
+CLOSE_NOTE = (
+	"Recorded. This pull request is closed so finished submissions do not accumulate. "
+	"A winning submission is committed to `main` by the publish job; merging the pull request is not how a record lands."
+)
+
+
+def close_pull_request(pr, smoke):
+	# The records are already written. A failure here must not drop them; the next publication tries again.
+	if os.environ.get("GITHUB_ACTIONS") != "true" or smoke or type(pr) is not int or pr <= 0:
+		return
+	repo = os.environ.get("GITHUB_REPOSITORY", "")
+	if not repo:
+		return
+
+	def gh(*args):
+		result = subprocess.run(["gh", *args], text=True, capture_output=True)
+		if result.returncode != 0:
+			raise RuntimeError(result.stderr.strip() or f"gh exited {result.returncode}")
+		return result.stdout.strip()
+
+	try:
+		if gh("pr", "view", str(pr), "--repo", repo, "--json", "state", "--jq", ".state") != "OPEN":
+			return
+		gh("pr", "comment", str(pr), "--repo", repo, "--body", CLOSE_NOTE)
+		gh("api", "-X", "PATCH", f"repos/{repo}/pulls/{pr}", "-f", "state=closed", "-f", "state_reason=completed")
+	except Exception as e:
+		print(f"leaving pull request #{pr} open: {type(e).__name__}: {str(e)[:300]}", file=sys.stderr)
+
+
 def write_records(records, index, run=None):
 	if run is not None:
 		(records / "runs").mkdir(exist_ok=True)
@@ -179,6 +214,7 @@ def fold(artifact, records, pr_path, margin):
 		"comment": comment(run, record_before, new_record) if stored is None
 			else f"Run {run_id} was already recorded; this publication changed nothing.",
 	}))
+	close_pull_request(run.get("pr"), bool(run.get("smoke")))
 
 
 def mark_promoted(records, run_id):
