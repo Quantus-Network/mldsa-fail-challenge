@@ -47,7 +47,7 @@
   "bench_exit": 0,
   "smoke": false,
   "promoted": true,
-  "promotion": "pending",
+  "promotion": "done",
   "run_url": "https://github.com/Quantus-Network/mldsa-fail-challenge/actions/runs/45953685362"
  },
  "runs": [
@@ -98,7 +98,7 @@
    "bench_exit": 0,
    "smoke": false,
    "promoted": true,
-   "promotion": "pending",
+   "promotion": "done",
    "run_url": "https://github.com/Quantus-Network/mldsa-fail-challenge/actions/runs/45953685362"
   }
  ]
