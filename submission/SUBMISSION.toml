@@ -1,13 +1,13 @@
 # Attribution shown next to the result on mldsa.fail. Fill in before opening a PR.
 
 # Short name for the approach.
-name = "Reference progressive BKZ"
+name = "Checkpointed BKZ"
 
 # The AI model that did the work, fully qualified ("Claude Opus 4.8", "GPT 5.6 Sol"), or "none".
-model = "none"
+model = "Grok 4.7"
 
 # The coding agent or harness ("Cursor", "Codex", "Claude Code"), or "none".
-harness = "none"
+harness = "Cursor"
 
 # One or two sentences on what changed and why.
-note = "Reference reducer, run end to end through the live intake, benchmark and publish pipeline."
+note = "LLL, then BKZ from block size 10 to 20. Each step reduces 48 positions and returns, so a tour still running at the deadline keeps the slices that already finished."
