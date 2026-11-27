@@ -52,6 +52,56 @@
  },
  "runs": [
   {
+   "id": "45994012311",
+   "commit": "54dea2e525b7ba6c783d1cd7da32fd604f623e6d",
+   "pr": 6,
+   "author": "illuzen",
+   "title": "Checkpoint BKZ tours so finished slices survive the deadline",
+   "name": "Checkpointed BKZ",
+   "model": "Grok 4.7",
+   "harness": "Cursor",
+   "note": "LLL, then BKZ from block size 10 to 20. Each step reduces 48 positions and returns, so a tour still running at the deadline keeps the slices that already finished.",
+   "started": "2026-11-27T11:53:44Z",
+   "finished": "2026-11-27T14:06:00Z",
+   "budget_secs": 7200,
+   "runner": {
+    "label": "ubuntu-latest",
+    "cpu": "AMD EPYC 7763 64-Core Processor",
+    "vcpus": 4
+   },
+   "drand": {
+    "round": 6678313,
+    "randomness": "9708656c8c2094933d1f358d3a2515f74364cf4c0ca3fa37f5cc5bcef1ff0ac0"
+   },
+   "seed": "222cbd6bee125b228d4dab539d80ec94cc64f5cdd572f5d2526eba9a57949589",
+   "instance": {
+    "dim": 2049,
+    "id": "c74c93fac2c6b788ed85d5c9b69cb01e46b7da593153c19d583a85327b9e9078",
+    "m": 1024,
+    "n": 1024,
+    "seed": "222cbd6bee125b228d4dab539d80ec94cc64f5cdd572f5d2526eba9a57949589",
+    "variant": "MlDsa44"
+   },
+   "status": "accepted",
+   "rejection": null,
+   "score_bits": 131320.38935575762,
+   "effective_block_size": 2.123108195420947,
+   "effective_root_hermite": 1.021765194124802,
+   "first_norm": 8380417.0,
+   "first_over_gh": 264.7640502736564,
+   "slope": -0.011543164296590183,
+   "self_reported": {
+    "termination": "Watchdog",
+    "counted_steps": 69,
+    "elapsed_secs": 7205.000088435
+   },
+   "bench_exit": 0,
+   "smoke": false,
+   "promoted": false,
+   "promotion": null,
+   "run_url": "https://github.com/Quantus-Network/mldsa-fail-challenge/actions/runs/45994012311"
+  },
+  {
    "id": "45953685362",
    "commit": "83138963403e49c3874bce479dd168cf9d19e979",
    "pr": 4,
