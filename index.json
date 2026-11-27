@@ -1,0 +1,105 @@
+{
+ "schema": 1,
+ "record": {
+  "id": "45953685362",
+  "commit": "83138963403e49c3874bce479dd168cf9d19e979",
+  "pr": 4,
+  "author": "illuzen",
+  "title": "Pipeline test: reference submission",
+  "name": "Reference progressive BKZ",
+  "model": "none",
+  "harness": "none",
+  "note": "Reference reducer, run end to end through the live intake, benchmark and publish pipeline.",
+  "started": "2026-11-27T06:44:49Z",
+  "finished": "2026-11-27T08:52:58Z",
+  "budget_secs": 7200,
+  "runner": {
+   "label": "ubuntu-latest",
+   "cpu": "Intel(R) Xeon(R) 6975P-C",
+   "vcpus": 4
+  },
+  "drand": {
+   "round": 6677695,
+   "randomness": "f8a2b9a61fef5528968de60aa9bb1bc9a267d0dea0182dfa2af8e247370897e3"
+  },
+  "seed": "e43f60aec2695eed9a41f8b7e682011c90ae93b80d7702d191ee9449f5cdf7d0",
+  "instance": {
+   "dim": 2049,
+   "id": "1631dd370c216d8937598baac8ab6d6d08f51e9879a89e8e361cac07d35810a7",
+   "m": 1024,
+   "n": 1024,
+   "seed": "e43f60aec2695eed9a41f8b7e682011c90ae93b80d7702d191ee9449f5cdf7d0",
+   "variant": "MlDsa44"
+  },
+  "status": "accepted",
+  "rejection": null,
+  "score_bits": 133677.01202162998,
+  "effective_block_size": 2.301054567084984,
+  "effective_root_hermite": 1.0215703708060486,
+  "first_norm": 8380417.0,
+  "first_over_gh": 264.7640502736536,
+  "slope": -0.011540885681413163,
+  "self_reported": {
+   "termination": "Watchdog",
+   "counted_steps": 4,
+   "elapsed_secs": 7205.000025144
+  },
+  "bench_exit": 0,
+  "smoke": false,
+  "promoted": true,
+  "promotion": "pending",
+  "run_url": "https://github.com/Quantus-Network/mldsa-fail-challenge/actions/runs/45953685362"
+ },
+ "runs": [
+  {
+   "id": "45953685362",
+   "commit": "83138963403e49c3874bce479dd168cf9d19e979",
+   "pr": 4,
+   "author": "illuzen",
+   "title": "Pipeline test: reference submission",
+   "name": "Reference progressive BKZ",
+   "model": "none",
+   "harness": "none",
+   "note": "Reference reducer, run end to end through the live intake, benchmark and publish pipeline.",
+   "started": "2026-11-27T06:44:49Z",
+   "finished": "2026-11-27T08:52:58Z",
+   "budget_secs": 7200,
+   "runner": {
+    "label": "ubuntu-latest",
+    "cpu": "Intel(R) Xeon(R) 6975P-C",
+    "vcpus": 4
+   },
+   "drand": {
+    "round": 6677695,
+    "randomness": "f8a2b9a61fef5528968de60aa9bb1bc9a267d0dea0182dfa2af8e247370897e3"
+   },
+   "seed": "e43f60aec2695eed9a41f8b7e682011c90ae93b80d7702d191ee9449f5cdf7d0",
+   "instance": {
+    "dim": 2049,
+    "id": "1631dd370c216d8937598baac8ab6d6d08f51e9879a89e8e361cac07d35810a7",
+    "m": 1024,
+    "n": 1024,
+    "seed": "e43f60aec2695eed9a41f8b7e682011c90ae93b80d7702d191ee9449f5cdf7d0",
+    "variant": "MlDsa44"
+   },
+   "status": "accepted",
+   "rejection": null,
+   "score_bits": 133677.01202162998,
+   "effective_block_size": 2.301054567084984,
+   "effective_root_hermite": 1.0215703708060486,
+   "first_norm": 8380417.0,
+   "first_over_gh": 264.7640502736536,
+   "slope": -0.011540885681413163,
+   "self_reported": {
+    "termination": "Watchdog",
+    "counted_steps": 4,
+    "elapsed_secs": 7205.000025144
+   },
+   "bench_exit": 0,
+   "smoke": false,
+   "promoted": true,
+   "promotion": "pending",
+   "run_url": "https://github.com/Quantus-Network/mldsa-fail-challenge/actions/runs/45953685362"
+  }
+ ]
+}
