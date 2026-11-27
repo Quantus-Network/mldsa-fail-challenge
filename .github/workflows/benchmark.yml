@@ -34,7 +34,9 @@ on:
         description: Instance m override (smoke tests only)
         default: ""
   # Lets a workflow on a feature branch exercise this one before it reaches
-  # main, where workflow_dispatch becomes available.
+  # main, where workflow_dispatch becomes available. The caller must grant
+  # the publish job's permissions even though that job is skipped for it;
+  # see AGENTS.md.
   workflow_call:
     inputs:
       commit:

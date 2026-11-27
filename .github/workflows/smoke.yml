@@ -1,0 +1,20 @@
+# Temporary: exercises benchmark.yml from this branch. Remove before merge.
+name: Smoke
+
+on:
+  push:
+    branches: [publish-job]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  smoke:
+    uses: ./.github/workflows/benchmark.yml
+    with:
+      commit: 5258345884f3a4d39e15903cc1277d5c24a0c8c7
+      pr: "4"
+      secs: "60"
+      n: "60"
+      m: "60"

@@ -58,7 +58,23 @@ keep it true when changing anything it describes.
 
 ## Testing the workflows
 
-`benchmark.yml` can be dispatched against any branch that contains it, with
-`secs`, `n` and `m` overrides for a minutes-long smoke test on
-`ubuntu-latest`; such runs are recorded with `smoke: true` and never ranked
-or promoted. `intake.yml` and the `publish` job only run from `main`.
+`workflow_dispatch` only exists on `main`, so a branch exercises
+`benchmark.yml` through its `workflow_call` entry point from a temporary
+workflow on that branch, with `secs`, `n` and `m` overrides for a
+minutes-long smoke test on `ubuntu-latest`. The caller must grant
+`permissions: {contents: write, pull-requests: write}`: GitHub validates
+the called workflow's job permissions against the caller's before any `if`
+runs, even though the `publish` job is skipped under a push event. Remove
+the temporary workflow before merging. Smoke runs are recorded with
+`smoke: true` and never ranked or promoted. `intake.yml` and the `publish`
+job only run from `main`.
+
+```yaml
+name: Smoke
+on: { push: { branches: [my-branch] } }
+permissions: { contents: write, pull-requests: write }
+jobs:
+  smoke:
+    uses: ./.github/workflows/benchmark.yml
+    with: { commit: <submission commit>, pr: "0", secs: "60", n: "60", m: "60" }
+```
