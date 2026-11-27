@@ -18,11 +18,11 @@ keep it true when changing anything it describes.
   harness and writes the basis snapshots the workflow scores.
 - `submission/` – the contestant's crate. `main` always holds the record.
 - `.github/workflows/` – `intake` (PR label → submission commit → dispatch),
-  `benchmark` (sandboxed run → trusted verify → artifact), `publish`
-  (records branch, promotion to `main`, PR comment, site dispatch).
+  `benchmark` (job `bench`: sandboxed run → trusted verify → artifact; job
+  `publish`: records branch, promotion to `main`, PR comment, site dispatch).
   `.github/scripts/publish.py` holds the records logic.
 - Branch `records` – `index.json` and `runs/<run_id>.json`, written only by
-  `publish`. The site reads it.
+  `benchmark`'s `publish` job. The site reads it.
 
 ## Working rules
 
@@ -39,9 +39,12 @@ keep it true when changing anything it describes.
   Contestant text (report values, `SUBMISSION.toml`, PR title): typed and
   bounded in `publish.py`, strict JSON out. Contestant stdout: only inside
   `::stop-commands::` markers. The sandbox never sees `.git` or a token.
-- `intake` and `publish` run from `main` with write access
-  (`pull_request_target`, `workflow_run`). They must never check out, build
-  or execute pull request content; copying files is the limit.
+- `intake` and the `publish` job run from `main` with write access
+  (`pull_request_target`; `publish` is a job of `benchmark`, which intake
+  always dispatches on `main`). They must never check out, build or execute
+  pull request content; copying files is the limit. `publish` is not a
+  separate `workflow_run` workflow because GitHub suppresses `workflow_run`
+  for runs dispatched with `GITHUB_TOKEN`.
 - Keep the verifier exact. `f64` is fine for `β_eff` and reporting, not for
   acceptance.
 - Any change to the instance, the scoring, the budget or the seed derivation
@@ -55,7 +58,23 @@ keep it true when changing anything it describes.
 
 ## Testing the workflows
 
-`benchmark.yml` can be dispatched against any branch that contains it, with
-`secs`, `n` and `m` overrides for a minutes-long smoke test on
-`ubuntu-latest`; such runs are recorded with `smoke: true` and never ranked
-or promoted. `intake.yml` and `publish.yml` only run from `main`.
+`workflow_dispatch` only exists on `main`, so a branch exercises
+`benchmark.yml` through its `workflow_call` entry point from a temporary
+workflow on that branch, with `secs`, `n` and `m` overrides for a
+minutes-long smoke test on `ubuntu-latest`. The caller must grant
+`permissions: {contents: write, pull-requests: write}`: GitHub validates
+the called workflow's job permissions against the caller's before any `if`
+runs, even though the `publish` job is skipped under a push event. Remove
+the temporary workflow before merging. Smoke runs are recorded with
+`smoke: true` and never ranked or promoted. `intake.yml` and the `publish`
+job only run from `main`.
+
+```yaml
+name: Smoke
+on: { push: { branches: [my-branch] } }
+permissions: { contents: write, pull-requests: write }
+jobs:
+  smoke:
+    uses: ./.github/workflows/benchmark.yml
+    with: { commit: <submission commit>, pr: "0", secs: "60", n: "60", m: "60" }
+```
