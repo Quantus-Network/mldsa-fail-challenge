@@ -12,8 +12,9 @@ the pull request. A new record is written with `promotion: "pending"`;
 failed push is retried by the next run rather than silently forgotten.
 
 `fold` then commits and pushes the records branch. It closes the pull request
-only after that push, and only when this run is not a promotion still waiting
-on `main`. `mark-promoted` runs after that push to `main`; it pushes the
+only after that push, and leaves it open while any promotion of that same
+pull request is still waiting on `main`. A run from another pull request can
+still close. `mark-promoted` runs after that push to `main`; it pushes the
 promotion flag and then closes. A failed push leaves the pull request open.
 A smoke test stays open. Closing is best effort: a failure is logged and the
 next publication of that run tries again. The workflow's own records commit
@@ -244,7 +245,9 @@ def fold(artifact, records, pr_path, margin):
 	}
 	push_records(records, f"Run {os.environ.get('RUN_ID', run_id)}: PR #{run.get('pr')}, {run['status']}")
 	print(json.dumps(decision))
-	if not (pending and record.get("id") == run_id):
+	# Closure is per pull request. A later, lower run of a pull request whose
+	# earlier win is still pending must not close it before that promotion lands.
+	if not (pending and record.get("pr") == run.get("pr")):
 		close_pull_request(run.get("pr"), bool(run.get("smoke")))
 
 
